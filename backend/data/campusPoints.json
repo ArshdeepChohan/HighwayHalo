@@ -2,25 +2,71 @@
   {
     "name": "Hostel Camera-1",
     "type": "CCTV",
-    "lat":30.8627650,
-    "lng": 75.8607660
+    "lat": 30.8627650,
+    "lng": 75.8607660,
+    "speedLimit": 30,
+    "alertDistance": 50,
+    "severity": "Medium",
+    "description": "CCTV camera monitoring hostel area"
   },
   {
     "name": "Accidental Prone Area",
     "type": "Speed Breaker",
     "lat": 30.8611150,
-    "lng": 75.8610131
+    "lng": 75.8610131,
+    "speedLimit": 20,
+    "alertDistance": 100,
+    "severity": "High",
+    "description": "High accident zone with speed breaker"
   },
   {
     "name": "Lipton Camera-2",
-    "type": "CCTV",
+    "type": "Speed Camera",
     "lat": 30.8600959,
-    "lng": 75.8610409
+    "lng": 75.8610409,
+    "speedLimit": 40,
+    "alertDistance": 150,
+    "severity": "High",
+    "description": "Speed camera enforcement zone"
   },
   {
-    "name": "MBA Block Contsruction Area",
-    "type": "Speed Breaker",
+    "name": "MBA Block Construction Area",
+    "type": "Construction",
     "lat": 30.8601031,
-    "lng": 75.8603610
+    "lng": 75.8603610,
+    "speedLimit": 25,
+    "alertDistance": 100,
+    "severity": "Medium",
+    "description": "Active construction zone"
+  },
+  {
+    "name": "Main Gate Red Light",
+    "type": "Red Light",
+    "lat": 30.8630000,
+    "lng": 75.8600000,
+    "speedLimit": 0,
+    "alertDistance": 200,
+    "severity": "Critical",
+    "description": "Traffic signal intersection"
+  },
+  {
+    "name": "School Zone Entrance",
+    "type": "School Zone",
+    "lat": 30.8615000,
+    "lng": 75.8615000,
+    "speedLimit": 20,
+    "alertDistance": 150,
+    "severity": "High",
+    "description": "School zone with reduced speed limit"
+  },
+  {
+    "name": "Hospital Emergency Zone",
+    "type": "Hospital Zone",
+    "lat": 30.8605000,
+    "lng": 75.8605000,
+    "speedLimit": 15,
+    "alertDistance": 100,
+    "severity": "Critical",
+    "description": "Hospital emergency access zone"
   }
 ]

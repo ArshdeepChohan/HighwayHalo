@@ -1,56 +1,39 @@
 const express = require('express');
-const mongoose = require('mongoose');
 const cors = require('cors');
+const { initializeDatabase } = require('./database');
 require('dotenv').config();
 
 const app = express();
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 3000;
 
 // Middleware
 app.use(cors());
 app.use(express.json());
 
-// MongoDB Connection
-mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/highway-halo', {
-  useNewUrlParser: true,
-  useUnifiedTopology: true,
-});
-
-mongoose.connection.on('connected', () => {
-  console.log('Connected to MongoDB');
-});
-
-mongoose.connection.on('error', (err) => {
-  console.log('MongoDB connection error:', err);
-});
+// Database Connection
+console.log('🗄️ Initializing SQLite database...');
+initializeDatabase()
+  .then(() => {
+    console.log('✅ Database initialized successfully');
+  })
+  .catch((error) => {
+    console.error('❌ Database initialization failed:', error);
+  });
 
 // Routes
 app.use('/api/points', require('./routes/points'));
+app.use('/api/auth', require('./routes/auth'));
+app.use('/api/reports', require('./routes/reports'));
 
 // Test route
 app.get('/api/test', (req, res) => {
   res.json({ message: 'Backend is working!' });
 });
 
-// Initialize sample data
-const initializeData = async () => {
-  const CampusPoint = require('./models/CampusPoint');
-  const sampleData = require('./data/campusPoints.json');
-  
-  try {
-    const count = await CampusPoint.countDocuments();
-    if (count === 0) {
-      await CampusPoint.insertMany(sampleData);
-      console.log('Sample data inserted successfully');
-    } else {
-      console.log('Data already exists, skipping initialization');
-    }
-  } catch (error) {
-    console.log('Error initializing data:', error);
-  }
-};
+// Sample data is loaded via fallback in routes
 
 app.listen(PORT,'0.0.0.0', () => {
   console.log(`🚀 Backend server running on http://localhost:${PORT}`);
-  initializeData();
+  console.log('📱 Mobile app can connect to this server');
+  console.log('🗄️ Using SQLite database for persistent storage');
 });
