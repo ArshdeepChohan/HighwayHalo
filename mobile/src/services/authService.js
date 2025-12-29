@@ -2,11 +2,13 @@ import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // Configure base URL for your backend
-const API_BASE_URL = 'http://localhost:3000/api'; // Change this to your backend URL
+const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL; // Change this to your backend URL
+console.log('API BASE URL =', API_BASE_URL);
 
 const api = axios.create({
   baseURL: API_BASE_URL,
   timeout: 10000,
+  
 });
 
 // Add token to requests

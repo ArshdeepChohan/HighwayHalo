@@ -16,12 +16,17 @@ const { width } = Dimensions.get('window');
 export default function StatsScreen({ navigation }) {
   const { settings } = useSettings();
   const [stats, setStats] = useState({
-    totalDistance: 0,
-    totalTime: 0,
-    maxSpeed: 0,
-    avgSpeed: 0,
-    alertsReceived: 0,
-    trips: [],
+    totalDistance: 34,
+    totalTime: 40,
+    maxSpeed: 60,
+    avgSpeed: 55,
+    alertsReceived: 2,
+    trips: [{
+      date: new Date("2025-12-21").toISOString(),
+       distance: 34000,
+      duration: 3600,
+      avgSpeed:55,
+    }],
   });
 
   useEffect(() => {
@@ -66,12 +71,17 @@ export default function StatsScreen({ navigation }) {
 
   const resetStats = () => {
     const emptyStats = {
-      totalDistance: 0,
-      totalTime: 0,
-      maxSpeed: 0,
-      avgSpeed: 0,
-      alertsReceived: 0,
-      trips: [],
+      totalDistance: 34000,
+      totalTime: 3600,
+      maxSpeed: 60,
+      avgSpeed: 65,
+      alertsReceived: 4,
+      trips: [{
+         date: new Date("2025-12-21").toISOString(),
+       distance: 34000,
+      duration: 3600,
+      avgSpeed:55,
+      }],
     };
     setStats(emptyStats);
     AsyncStorage.setItem('tripStats', JSON.stringify(emptyStats));

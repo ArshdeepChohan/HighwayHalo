@@ -12,15 +12,21 @@ import {
 import * as Location from 'expo-location';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../contexts/AuthContext';
+import { reportService } from '../services/reportService';
 
 const REPORT_TYPES = [
-  { id: 'speed-camera', label: 'Speed Camera', icon: 'camera', color: '#ff6b6b' },
-  { id: 'speed-breaker', label: 'Speed Breaker', icon: 'warning', color: '#ffa726' },
-  { id: 'red-light', label: 'Red Light Camera', icon: 'stop-circle', color: '#ef5350' },
-  { id: 'accident', label: 'Accident', icon: 'alert-circle', color: '#f44336' },
-  { id: 'construction', label: 'Construction', icon: 'construct', color: '#ff9800' },
-  { id: 'police', label: 'Police Checkpoint', icon: 'shield', color: '#2196f3' },
-  { id: 'hazard', label: 'Road Hazard', icon: 'warning', color: '#ff5722' },
+  { id: 'Speed-Camera', label: 'Speed Camera', icon: 'camera', color: '#ff6b6b' },
+  { id: 'Speed-Breaker', label: 'Speed Breaker', icon: 'warning', color: '#ffa726' },
+  { id: 'Red-Light', label: 'Red Light Camera', icon: 'stop-circle', color: '#ef5350' },
+  { id: 'Accident', label: 'Accident', icon: 'alert-circle', color: '#f44336' },
+  { id: 'Construction', label: 'Construction', icon: 'construct', color: '#ff9800' },
+  { id: 'Police Check', label: 'Police Checkpoint', icon: 'shield', color: '#2196f3' },
+  { id: 'Hazard', label: 'Road Hazard', icon: 'warning', color: '#ff5722' },
+  { id: 'Traffic', label: 'Traffic Jam', icon: 'car', color: '#9c27b0' },
+  { id: 'Road Block', label: 'Road Block', icon: 'ban', color: '#607d8b' },
+  { id: 'Flood', label: 'Flooded Road', icon: 'water', color: '#03a9f4' },
+  { id: 'Broken Signal', label: 'Broken Traffic Signal', icon: 'flash', color: '#ffeb3b' },
+  { id: 'Other', label: 'Other', icon: 'ellipsis-horizontal', color: '#795548' },
 ];
 
 export default function ReportsScreen({ navigation }) {
@@ -53,21 +59,12 @@ export default function ReportsScreen({ navigation }) {
         lat: location.coords.latitude,
         lng: location.coords.longitude,
         description: description.trim(),
-        reportedBy: user?.username || 'Guest',
-        timestamp: new Date().toISOString(),
+        reportedBy: isGuest ? null : user?.id,
       };
+      const response = await reportService.createReport(reportData);
 
-      // Submit to backend
-      const API_URL = 'http://localhost:3000';
-      const response = await fetch(`${API_URL}/api/reports`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(reportData),
-      });
 
-      if (response.ok) {
+      if (response) {
         Alert.alert('Success', 'Report submitted successfully!', [
           { text: 'OK', onPress: () => {
             setModalVisible(false);

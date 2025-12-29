@@ -1,61 +1,139 @@
 const express = require('express');
-const { alertPointsOperations } = require('../database');
 const router = express.Router();
 
-// Fallback data when MongoDB is not available
-const fallbackPoints = [
-  {
-    name: "Speed Camera",
-    type: "Speed Camera",
-    lat: 30.8600959,
-    lng: 75.8610409,
-    speedLimit: 40,
-    alertDistance: 150,
-    severity: "High",
-    description: "Speed camera enforcement zone"
-  },
-  {
-    name: "Speed Breaker",
-    type: "Speed Breaker",
-    lat: 30.8611150,
-    lng: 75.8610131,
-    speedLimit: 20,
-    alertDistance: 100,
-    severity: "High",
-    description: "High accident zone with speed breaker"
-  },
-  {
-    name: "Red Light",
-    type: "Red Light",
-    lat: 30.8630000,
-    lng: 75.8600000,
-    speedLimit: 0,
-    alertDistance: 200,
-    severity: "Critical",
-    description: "Traffic signal intersection"
-  },
-  {
-    name: "School Zone",
-    type: "School Zone",
-    lat: 30.8615000,
-    lng: 75.8615000,
-    speedLimit: 20,
-    alertDistance: 150,
-    severity: "High",
-    description: "School zone with reduced speed limit"
-  }
-];
+const {
+  createPoint,
+  getAllPoints,
+  getNearbyPoints,
+  getPointById,
+  updatePoint,
+  deletePoint,
+  hardDeletePoint
+} = require('../services/alertPoint.service');
 
-// GET /points - Get all campus points
+/**
+ * GET /api/points
+ * - If lat & lng provided → nearby alert points
+ * - Else → all active alert points
+ */
 router.get('/', async (req, res) => {
   try {
-    // Get points from database
-    const points = await alertPointsOperations.getAllPoints();
+    const { lat, lng, radius = 5000 } = req.query;
+    let points;
+
+    if (lat && lng) {
+      points = await getNearbyPoints({
+        lat: Number(lat),
+        lng: Number(lng),
+        radius: Number(radius),
+      });
+    } else {
+      points = await getAllPoints();
+    }
+
+    // 🔁 newest first (same behavior as reports)
+    points.sort(
+      (a, b) => new Date(b.createdAt) - new Date(a.createdAt)
+    );
+
     res.json(points);
   } catch (error) {
-    console.log('Error getting points:', error.message);
-    // Fallback to static data if database fails
-    res.json(fallbackPoints);
+    console.error('Error getting points:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch alert points',
+    });
+  }
+});
+
+
+/**
+ * GET /api/points/:id
+ * Get alert point by ID
+ */
+router.get('/:id', async (req, res) => {
+  try {
+    console.log('Fetching alert point with ID:', req.params.id);
+    const point = await getPointById(req.params.id);
+    if (!point) {
+      return res.status(404).json({ message: 'Alert point not found' });
+    }
+    res.json(point);
+  } catch (error) {
+    res.status(400).json({ message: error.message });
+  }
+});
+
+/**
+ * POST /api/points
+ * Create new alert point (Admin)
+ */
+router.post('/', async (req, res) => {
+  try {
+    const point = await createPoint(req.body);
+    res.status(201).json({
+      success: true,
+      point
+    });
+  } catch (error) {
+    res.status(400).json({
+      success: false,
+      message: error.message
+    });
+  }
+});
+
+/**
+ * PUT /api/points/:id
+ * Update alert point
+ */
+router.put('/:id', async (req, res) => {
+  try {
+    const updated = await updatePoint(req.params.id, req.body);
+    if (!updated) {
+      return res.status(404).json({ message: 'Alert point not found' });
+    }
+    res.json({
+      success: true,
+      point: updated
+    });
+  } catch (error) {
+    res.status(400).json({ message: error.message });
+  }
+});
+
+/**
+ * DELETE /api/points/:id
+ * Soft delete (disable alert point)
+ */
+router.delete('/:id', async (req, res) => {
+  try {
+    const deleted = await deletePoint(req.params.id);
+    if (!deleted) {
+      return res.status(404).json({ message: 'Alert point not found' });
+    }
+    res.json({
+      success: true,
+      message: 'Alert point disabled successfully'
+    });
+  } catch (error) {
+    res.status(400).json({ message: error.message });
+  }
+});
+
+/**
+ * DELETE /api/points/hard/:id
+ * Hard delete (permanent – admin only)
+ */
+router.delete('/hard/:id', async (req, res) => {
+  try {
+    await hardDeletePoint(req.params.id);
+    res.json({
+      success: true,
+      message: 'Alert point permanently deleted'
+    });
+  } catch (error) {
+    res.status(400).json({ message: error.message });
   }
 });
 

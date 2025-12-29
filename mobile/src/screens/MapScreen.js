@@ -14,8 +14,14 @@ import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../contexts/AuthContext';
 import { useSettings } from '../contexts/SettingsContext';
 import { playAlertSound, speakAlert } from '../services/audioService';
+import { pointService } from '../services/pointService';
+import { reportService } from '../services/reportService';
+
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const { width, height } = Dimensions.get('window');
+
+
 
 export default function MapScreen({ navigation }) {
   const [location, setLocation] = useState(null);
@@ -23,11 +29,34 @@ export default function MapScreen({ navigation }) {
   const [speed, setSpeed] = useState(0);
   const [speedLimit, setSpeedLimit] = useState(50);
   const [alertPoints, setAlertPoints] = useState([]);
+  const [reports, setReports] = useState([]);
+
   const [currentAlert, setCurrentAlert] = useState(null);
   const [isLocationEnabled, setIsLocationEnabled] = useState(false);
   const { user, logout, isGuest } = useAuth();
   const { settings } = useSettings();
   const [lastAlertTime, setLastAlertTime] = useState({});
+  //Stat data
+  const tripStartTimeRef = React.useRef(null);
+  const tripActiveRef = React.useRef(false);
+  const lastLocationRef = React.useRef(null);
+  const totalDistanceRef = React.useRef(0);
+  const maxSpeedRef = React.useRef(0);
+  const alertCountRef = React.useRef(0);
+  const idleTimerRef = React.useRef(null);
+
+  const [isMapExpanded, setIsMapExpanded] = useState(true);
+
+  const [reportModalVisible, setReportModalVisible] = useState(false);
+  const [selectedReport, setSelectedReport] = useState(null);
+
+  const [isMapFullScreen, setIsMapFullScreen] = useState(false);
+
+  const [activeTab, setActiveTab] = useState('points'); 
+
+
+
+
   
   // Ensure settings are available
   const safeSettings = settings || {
@@ -42,8 +71,52 @@ export default function MapScreen({ navigation }) {
 
   useEffect(() => {
     getLocationPermission();
-    fetchAlertPoints();
   }, []);
+
+  const saveTripStats = async () => {
+    if (!tripStartTimeRef.current) return;
+
+    const durationSec = Math.floor(
+      (Date.now() - tripStartTimeRef.current) / 1000
+    );
+
+    const avgSpeed =
+      durationSec > 0
+        ? (totalDistanceRef.current / durationSec) * 3.6
+        : 0;
+
+    const existing = await AsyncStorage.getItem('tripStats');
+    const prev = existing ? JSON.parse(existing) : {
+      totalDistance: 0,
+      totalTime: 0,
+      maxSpeed: 0,
+      avgSpeed: 0,
+      alertsReceived: 0,
+      trips: [],
+    };
+
+    const newTrip = {
+      date: new Date().toISOString(),
+      distance: totalDistanceRef.current,
+      duration: durationSec,
+      avgSpeed,
+    };
+
+    const updatedStats = {
+      totalDistance: prev.totalDistance + totalDistanceRef.current,
+      totalTime: prev.totalTime + durationSec,
+      maxSpeed: Math.max(prev.maxSpeed, maxSpeedRef.current),
+      avgSpeed:
+        prev.totalTime + durationSec > 0
+          ? ((prev.totalDistance + totalDistanceRef.current) /
+              (prev.totalTime + durationSec)) * 3.6
+          : 0,
+      alertsReceived: prev.alertsReceived + alertCountRef.current,
+      trips: [newTrip, ...prev.trips],
+    };
+
+    await AsyncStorage.setItem('tripStats', JSON.stringify(updatedStats));
+  };
 
   useEffect(() => {
     let locationSubscription = null;
@@ -69,6 +142,45 @@ export default function MapScreen({ navigation }) {
           if (alertPoints.length > 0) {
             checkProximityAlerts(latitude, longitude, speedKmh);
           }
+          // 🚀 Start trip
+          if (speedKmh > 3 && !tripActiveRef.current) {
+            tripActiveRef.current = true;
+            if (!tripStartTimeRef.current) {
+              tripStartTimeRef.current = Date.now();
+            }
+          }
+
+
+          // ⏸ Pause trip if idle
+          if (speedKmh <= 3) {
+            if (!idleTimerRef.current) {
+              idleTimerRef.current = setTimeout(() => {
+                tripActiveRef.current = false;
+              }, 30000); // 30 sec idle
+            }
+          } else {
+            if (idleTimerRef.current) {
+              clearTimeout(idleTimerRef.current);
+              idleTimerRef.current = null;
+            }
+          }
+
+          if (tripActiveRef.current && lastLocationRef.current) {
+            const dist = calculateDistance(
+              lastLocationRef.current.latitude,
+              lastLocationRef.current.longitude,
+              latitude,
+              longitude
+            );
+            totalDistanceRef.current += dist;
+          }
+
+          lastLocationRef.current = { latitude, longitude };
+          if (speedKmh > maxSpeedRef.current) {
+            maxSpeedRef.current = speedKmh;
+          }
+
+
         }
       ).then(subscription => {
         locationSubscription = subscription;
@@ -78,9 +190,58 @@ export default function MapScreen({ navigation }) {
         if (locationSubscription) {
           locationSubscription.remove();
         }
+        if (!tripStartTimeRef.current || totalDistanceRef.current < 5) return;
+        saveTripStats()
+        tripActiveRef.current = false;
+        tripStartTimeRef.current = null;
+        lastLocationRef.current = null;
+        totalDistanceRef.current = 0;
+        maxSpeedRef.current = 0;
+        alertCountRef.current = 0;
+
       };
     }
   }, [isLocationEnabled, alertPoints]);
+
+  const handleUpvoteReport = async () => {
+    try {
+      if (!selectedReport) return;
+
+      await reportService.upvoteReport(selectedReport._id);
+
+      Alert.alert('Thank you!', 'Report upvoted successfully');
+      setReportModalVisible(false);
+
+      // Refresh nearby reports
+      if (location) {
+        fetchNearbyData(location.latitude, location.longitude);
+      }
+    } catch (error) {
+      console.error('Upvote failed:', error);
+      Alert.alert('Error', 'Failed to upvote report');
+    }
+  };
+
+  const handleResolveReport = async () => {
+    try {
+      if (!selectedReport) return;
+
+      await reportService.deleteReport(selectedReport._id);
+
+      Alert.alert('Resolved', 'Report has been closed');
+      setReportModalVisible(false);
+
+      // Refresh reports
+      setReports(prev =>
+        prev.filter(r => r._id !== selectedReport._id)
+      );
+    } catch (error) {
+      console.error('Delete failed:', error);
+      Alert.alert('Error', 'Failed to resolve report');
+    }
+  };
+
+
 
   const getLocationPermission = async () => {
     try {
@@ -103,38 +264,28 @@ export default function MapScreen({ navigation }) {
     }
   };
 
-  const fetchAlertPoints = async () => {
+  const fetchNearbyData = async (latitude, longitude) => {
     try {
-      // Try to get IP from environment or use localhost
-      const API_URL = 'http://localhost:3000';
-      const response = await fetch(`${API_URL}/api/points`);
-      const points = await response.json();
-      setAlertPoints(points);
-    } catch (error) {
-      console.error('Error fetching alert points:', error);
-      // Fallback data
-      setAlertPoints([
-        {
-          name: "Speed Camera",
-          type: "Speed Camera",
-          lat: 30.8600959,
-          lng: 75.8610409,
-          speedLimit: 40,
-          alertDistance: 150,
-          severity: "High"
-        },
-        {
-          name: "Speed Breaker",
-          type: "Speed Breaker",
-          lat: 30.8611150,
-          lng: 75.8610131,
-          speedLimit: 20,
-          alertDistance: 100,
-          severity: "High"
-        }
+      const [points, reportsData] = await Promise.all([
+        pointService.getNearbyPoints({
+          lat: latitude,
+          lng: longitude,
+          radius: safeSettings.alertRadius || 1500,
+        }),
+        reportService.getNearbyReports({
+          lat: latitude,
+          lng: longitude,
+          radius: safeSettings.alertRadius || 2000,
+        }),
       ]);
+      setAlertPoints(points);
+      setReports(reportsData);
+    } catch (error) {
+      console.error('Error fetching nearby data:', error);
     }
   };
+
+
 
   const startLocationTracking = async () => {
     try {
@@ -148,6 +299,9 @@ export default function MapScreen({ navigation }) {
       // Calculate speed in km/h
       const speedKmh = locationSpeed ? Math.abs(locationSpeed * 3.6) : 0;
       setSpeed(Math.round(speedKmh));
+
+      // ✅ FETCH POINTS + REPORTS
+      fetchNearbyData(latitude, longitude);
 
       // Check for proximity alerts
       checkProximityAlerts(latitude, longitude, speedKmh);
@@ -189,6 +343,7 @@ export default function MapScreen({ navigation }) {
 
     if (nearestAlert && nearestAlert.distance <= nearestAlert.alertDistance) {
       showAlert(nearestAlert);
+
     }
   };
 
@@ -202,6 +357,7 @@ export default function MapScreen({ navigation }) {
     }
     
     setLastAlertTime({ ...lastAlertTime, [alertKey]: now });
+    alertCountRef.current += 1; 
     setCurrentAlert(alertData);
     
     // Play audio alert
@@ -220,15 +376,56 @@ export default function MapScreen({ navigation }) {
 
   const getAlertIcon = (type) => {
     switch (type) {
-      case 'Speed Camera': return 'camera';
-      case 'Speed Breaker': return 'warning';
-      case 'Red Light': return 'stop-circle';
-      case 'School Zone': return 'school';
-      case 'Hospital Zone': return 'medical';
-      case 'Construction': return 'construct';
-      default: return 'warning';
+      case 'Speed-Camera':
+      case 'Speed Camera':
+        return 'camera';
+
+      case 'Speed-Breaker':
+      case 'Speed Breaker':
+        return 'warning';
+
+      case 'Red-Light':
+      case 'Red Light':
+        return 'stop-circle';
+
+      case 'Accident':
+        return 'car-crash-outline'; // 🚗💥 (fallback to warning if not available)
+
+      case 'Traffic':
+        return 'car-outline';
+
+      case 'Road Block':
+        return 'close-circle';
+
+      case 'Police Check':
+        return 'shield-checkmark';
+
+      case 'Flood':
+        return 'water';
+
+      case 'Construction':
+        return 'construct';
+
+      case 'Broken Signal':
+        return 'alert-circle';
+
+      case 'Hazard':
+        return 'alert';
+
+      case 'School Zone':
+        return 'school';
+
+      case 'Hospital Zone':
+        return 'medical';
+
+      case 'Other':
+        return 'information-circle';
+
+      default:
+        return 'warning';
     }
   };
+
 
   const getAlertColor = (severity) => {
     switch (severity) {
@@ -321,7 +518,7 @@ export default function MapScreen({ navigation }) {
       </View>
 
       {/* Location Info */}
-      <View style={styles.locationContainer}>
+      {/* <View style={styles.locationContainer}>
         <Ionicons name="location" size={20} color="#4CAF50" />
         <Text style={styles.locationText}>
           {location ? 
@@ -329,11 +526,33 @@ export default function MapScreen({ navigation }) {
             'Getting location...'
           }
         </Text>
-      </View>
+      </View> */}
+      {/* Map Toggle Header */}
+      <TouchableOpacity
+        style={styles.mapToggle}
+        onPress={() => setIsMapExpanded(prev => !prev)}
+      >
+        <Ionicons
+          name={isMapExpanded ? 'chevron-up' : 'chevron-down'}
+          size={22}
+          color="#333"
+        />
+        <Text style={styles.mapToggleText}>
+          {isMapExpanded ? 'Hide Map' : 'Show Map'}
+        </Text>
+      </TouchableOpacity>
+
 
       {/* Map View */}
-      {location && safeSettings.showMap && (
+      {location && safeSettings.showMap && isMapExpanded && (
         <View style={styles.mapContainer}>
+          <TouchableOpacity
+            style={styles.fullscreenButtonMap}
+            onPress={() => setIsMapFullScreen(true)}
+          >
+            <Ionicons name="expand" size={22} color="#fff" />
+          </TouchableOpacity>
+
           <MapView
             style={styles.map}
             initialRegion={{
@@ -348,61 +567,182 @@ export default function MapScreen({ navigation }) {
               latitudeDelta: 0.01,
               longitudeDelta: 0.01,
             }}
-            showsUserLocation={true}
-            showsMyLocationButton={true}
-            followsUserLocation={true}
-            mapType="standard"
+            showsUserLocation
+            showsMyLocationButton
+            followsUserLocation
           >
+            {/* User Marker */}
             <Marker
               coordinate={{
                 latitude: location.latitude,
                 longitude: location.longitude,
               }}
               title="Your Location"
-              description={`Speed: ${speed} km/h`}
             >
               <Ionicons name="location" size={30} color="#00d4ff" />
             </Marker>
+
+            {/* Alert Points */}
             {alertPoints.map((point, index) => (
               <Marker
-                key={index}
-                coordinate={{
-                  latitude: point.lat,
-                  longitude: point.lng,
-                }}
+                key={`point-${index}`}
+                coordinate={{ latitude: point.lat, longitude: point.lng }}
                 title={point.name}
-                description={point.type}
               >
-                <Ionicons 
-                  name={getAlertIcon(point.type)} 
-                  size={25} 
-                  color={getAlertColor(point.severity)} 
+                <Ionicons
+                  name={getAlertIcon(point.type)}
+                  size={25}
+                  color={getAlertColor(point.severity)}
                 />
               </Marker>
+            ))}
+
+            {/* Reports */}
+            {reports
+              .filter(
+                r =>
+                  r.location &&
+                  Array.isArray(r.location.coordinates) &&
+                  r.location.coordinates.length === 2
+              )
+              .map((report, index) => (
+                <Marker
+                  key={`report-${report._id || index}`}
+                  coordinate={{
+                    latitude: report.location.coordinates[1],
+                    longitude: report.location.coordinates[0],
+                  }}
+                  title={report.type}
+                >
+                  <Ionicons
+                    name={getAlertIcon(report.type)}
+                    size={22}
+                    color="#ff1744"
+                  />
+                </Marker>
             ))}
           </MapView>
         </View>
       )}
 
+
       {/* Alert Points List */}
-      <ScrollView style={styles.alertListContainer}>
-        <Text style={styles.alertListTitle}>Nearby Alert Points</Text>
-        {alertPoints.map((point, index) => (
-          <View key={index} style={styles.alertPointItem}>
-            <Ionicons 
-              name={getAlertIcon(point.type)} 
-              size={24} 
-              color={getAlertColor(point.severity)} 
-            />
-            <View style={styles.alertPointInfo}>
-              <Text style={styles.alertPointName}>{point.name}</Text>
-              <Text style={styles.alertPointType}>{point.type}</Text>
-              <Text style={styles.alertPointDetails}>
-                Speed Limit: {point.speedLimit} km/h • Alert: {point.alertDistance}m
-              </Text>
-            </View>
-          </View>
-        ))}
+      <ScrollView
+        style={styles.alertListContainer}
+        scrollEnabled={!isMapFullScreen}
+      >
+        {/* 🔀 TAB BAR */}
+        <View style={styles.tabBar}>
+          <TouchableOpacity
+            style={[
+              styles.tabButton,
+              activeTab === 'points' && styles.activeTab
+            ]}
+            onPress={() => setActiveTab('points')}
+          >
+            <Text
+              style={[
+                styles.tabText,
+                activeTab === 'points' && styles.activeTabText
+              ]}
+            >
+              Alert Points ({alertPoints.length})
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[
+              styles.tabButton,
+              activeTab === 'reports' && styles.activeTab
+            ]}
+            onPress={() => setActiveTab('reports')}
+          >
+            <Text
+              style={[
+                styles.tabText,
+                activeTab === 'reports' && styles.activeTabText
+              ]}
+            >
+              Reports ({reports.length})
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+
+        {/* 📍 ALERT POINTS TAB */}
+        {activeTab === 'points' && (
+          <>
+            <Text style={styles.alertListTitle}>Nearby Alert Points</Text>
+
+            {alertPoints.length === 0 && (
+              <Text style={styles.emptyText}>No alert points nearby</Text>
+            )}
+
+            {alertPoints.map((point, index) => (
+              <View key={index} style={styles.alertPointItem}>
+                <Ionicons
+                  name={getAlertIcon(point.type)}
+                  size={24}
+                  color={getAlertColor(point.severity)}
+                />
+                <View style={styles.alertPointInfo}>
+                  <Text style={styles.alertPointName}>{point.name}</Text>
+                  <Text style={styles.alertPointType}>{point.type}</Text>
+                  <Text style={styles.alertPointDetails}>
+                    Speed Limit: {point.speedLimit} km/h • Alert: {point.alertDistance}m
+                  </Text>
+                </View>
+              </View>
+            ))}
+          </>
+        )}
+
+        {/* 🚨 REPORTS TAB */}
+        {activeTab === 'reports' && (
+          <>
+            <Text style={styles.alertListTitle}>Nearby Reports</Text>
+
+            {reports.length === 0 && (
+              <Text style={styles.emptyText}>No reports nearby</Text>
+            )}
+
+            {reports.map((report, index) => (
+              <View key={report._id || index} style={styles.alertPointItem}>
+                <Ionicons
+                  name={getAlertIcon(report.type)}
+                  size={24}
+                  color="#ff1744"
+                />
+
+                <View style={styles.alertPointInfo}>
+                  <Text style={styles.alertPointName}>
+                    {report.label || report.type}
+                  </Text>
+                  <Text style={styles.alertPointType}>
+                    Reported by {report.reportedBy || 'User'}
+                  </Text>
+                  <Text style={styles.alertPointDetails}>
+                    {report.description}
+                    {report.upvotes ? ` • votes: ${report.upvotes}` : ''}
+                  </Text>
+                </View>
+
+                {/* ❗ Action */}
+                <TouchableOpacity
+                  onPress={() => {
+                    setSelectedReport(report);
+                    setReportModalVisible(true);
+                  }}
+                >
+                  <Ionicons name="alert-circle" size={26} color="#ff9800" />
+                </TouchableOpacity>
+              </View>
+            ))}
+          </>
+        )}
+
+
+
       </ScrollView>
 
       {/* Alert Modal */}
@@ -441,6 +781,124 @@ export default function MapScreen({ navigation }) {
           <Text style={styles.statusText}>Alerts On</Text>
         </View>
       </View>
+
+      {/* 🔥 REPORT CONFIRMATION MODAL — ADD HERE */}
+      {reportModalVisible && selectedReport && (
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalBox}>
+            <Ionicons name="alert-circle" size={40} color="#ff9800" />
+
+            <Text style={styles.modalTitle}>
+              Is this situation still the same?
+            </Text>
+
+            <Text style={styles.modalSubtitle}>
+              {selectedReport.label || selectedReport.type}
+            </Text>
+
+            <View style={styles.modalButtons}>
+              <TouchableOpacity
+                style={[styles.modalButton, styles.confirmButton]}
+                onPress={handleUpvoteReport}
+              >
+                <Text style={styles.modalButtonText}>Yes</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.modalButton, styles.resolveButton]}
+                onPress={handleResolveReport}
+              >
+                <Text style={styles.modalButtonText}>Resolved</Text>
+              </TouchableOpacity>
+            </View>
+
+            <TouchableOpacity
+              style={styles.cancelButton}
+              onPress={() => setReportModalVisible(false)}
+            >
+              <Text style={styles.cancelButtonText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+
+      {/* 🗺️ FULL SCREEN MAP — ADD HERE */}
+      {isMapFullScreen && location && (
+        <View style={styles.fullscreenMapOverlay}>
+          <View style={styles.fullscreenMapOverlay}>
+            <MapView
+              style={styles.fullscreenMap}
+              initialRegion={{
+                latitude: location.latitude,
+                longitude: location.longitude,
+                latitudeDelta: 0.01,
+                longitudeDelta: 0.01,
+              }}
+              showsUserLocation
+              followsUserLocation
+
+              // 🔥 IMPORTANT
+              scrollEnabled={true}
+              zoomEnabled={true}
+              rotateEnabled={true}
+              pitchEnabled={true}
+              zoomTapEnabled={true}
+            >
+              {/* User Marker */}
+              <Marker
+                coordinate={{
+                  latitude: location.latitude,
+                  longitude: location.longitude,
+                }}
+              />
+
+              {/* Alert Points */}
+              {alertPoints.map((point, index) => (
+                <Marker
+                  key={`fs-point-${index}`}
+                  coordinate={{ latitude: point.lat, longitude: point.lng }}
+                >
+                  <Ionicons
+                    name={getAlertIcon(point.type)}
+                    size={26}
+                    color={getAlertColor(point.severity)}
+                  />
+                </Marker>
+              ))}
+
+              {/* Reports */}
+              {reports
+                .filter(r => r?.location?.coordinates?.length === 2)
+                .map((report, index) => (
+                  <Marker
+                    key={`fs-report-${index}`}
+                    coordinate={{
+                      latitude: report.location.coordinates[1],
+                      longitude: report.location.coordinates[0],
+                    }}
+                  >
+                    <Ionicons
+                      name={getAlertIcon(report.type)}
+                      size={24}
+                      color="#ff1744"
+                    />
+                  </Marker>
+              ))}
+            </MapView>
+
+            {/* ❌ Close Fullscreen */}
+            <TouchableOpacity
+              style={styles.closeFullscreenButton}
+              onPress={() => setIsMapFullScreen(false)}
+            >
+              <Ionicons name="close" size={28} color="#fff" />
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+
+
+      
     </View>
   );
 }
@@ -519,6 +977,174 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     elevation: 5,
   },
+  modalOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 2000,
+  },
+  modalBox: {
+    width: '85%',
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    padding: 20,
+    alignItems: 'center',
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    marginTop: 10,
+    textAlign: 'center',
+  },
+  modalSubtitle: {
+    fontSize: 14,
+    color: '#666',
+    marginVertical: 10,
+    textAlign: 'center',
+  },
+  tabBar: {
+    flexDirection: 'row',
+    marginBottom: 15,
+    backgroundColor: '#f0f0f0',
+    borderRadius: 10,
+    overflow: 'hidden',
+  },
+
+  tabButton: {
+    flex: 1,
+    paddingVertical: 10,
+    alignItems: 'center',
+  },
+
+  activeTab: {
+    backgroundColor: '#1a1a2e',
+  },
+
+  tabText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#555',
+  },
+
+  activeTabText: {
+    color: '#fff',
+  },
+
+  emptyText: {
+    textAlign: 'center',
+    color: '#888',
+    fontSize: 12,
+    marginVertical: 20,
+  },
+
+  modalButtons: {
+    flexDirection: 'row',
+    marginTop: 20,
+  },
+  fullscreenButton: {
+    position: 'absolute',
+    top: 10,
+    right: 10,
+    backgroundColor: '#000',
+    padding: 8,
+    borderRadius: 20,
+    zIndex: 10,
+    opacity: 0.8,
+  },
+  fullscreenButtonMap: {
+    position: 'absolute',
+    top: 10,
+    left: 10,
+    backgroundColor: '#000',
+    padding: 8,
+    borderRadius: 20,
+    zIndex: 10,
+    opacity: 0.8,
+  },
+
+  fullscreenMapOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: '#000',
+    zIndex: 3000,
+    pointerEvents: 'auto',
+  },
+
+  fullscreenMapWrapper: {
+    flex: 1,
+    pointerEvents: 'auto',
+  },
+
+
+  fullscreenMap: {
+    flex: 1,
+  },
+
+  closeFullscreenButton: {
+    position: 'absolute',
+    top: 40,
+    right: 20,
+    backgroundColor: '#000',
+    padding: 10,
+    borderRadius: 20,
+    opacity: 0.8,
+  },
+
+  modalButton: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 10,
+    marginHorizontal: 5,
+    alignItems: 'center',
+  },
+  confirmButton: {
+    backgroundColor: '#4CAF50',
+  },
+  resolveButton: {
+    backgroundColor: '#f44336',
+  },
+  modalButtonText: {
+    color: '#fff',
+    fontWeight: 'bold',
+  },
+  cancelButton: {
+    marginTop: 15,
+  },
+  cancelButtonText: {
+    color: '#888',
+    fontSize: 14,
+  },
+
+  mapToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#fff',
+    marginHorizontal: 20,
+    marginBottom: 10,
+    paddingVertical: 10,
+    borderRadius: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  mapToggleText: {
+    marginLeft: 8,
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#333',
+  },
+
   speedDisplay: {
     flex: 1,
     alignItems: 'center',
@@ -576,7 +1202,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   mapContainer: {
-    height: 300,
+    height: 180,
     marginHorizontal: 20,
     marginBottom: 20,
     borderRadius: 15,

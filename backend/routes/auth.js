@@ -1,12 +1,21 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
-const { userOperations } = require('../database');
 const router = express.Router();
 
-// JWT Secret (in production, use environment variable)
+// 🔥 New User Service (Mongoose)
+const {
+  createUser,
+  findUserByIdentifier,
+  findUserById,
+  comparePassword,
+  updateUserPreferences,
+  updateVehicleType,
+  updateLastLogin
+} = require('../services/user.service');
+
+// JWT Secret
 const JWT_SECRET = process.env.JWT_SECRET || 'highway-halo-secret-key';
 
-// Middleware to verify JWT token
 const authenticateToken = async (req, res, next) => {
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
@@ -17,10 +26,12 @@ const authenticateToken = async (req, res, next) => {
 
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
-    const user = await userOperations.findUserById(decoded.userId);
+
+    const user = await findUserById(decoded.userId);
     if (!user || !user.isActive) {
       return res.status(401).json({ message: 'Invalid token' });
     }
+
     req.user = user;
     next();
   } catch (error) {
@@ -28,7 +39,6 @@ const authenticateToken = async (req, res, next) => {
   }
 };
 
-// Register new user
 router.post('/register', async (req, res) => {
   try {
     const { username, email, phone, password } = req.body;
@@ -39,23 +49,31 @@ router.post('/register', async (req, res) => {
     }
 
     if (password.length < 6) {
-      return res.status(400).json({ message: 'Password must be at least 6 characters' });
+      return res.status(400).json({
+        message: 'Password must be at least 6 characters'
+      });
     }
 
     // Check if user already exists
-    const existingUser = await userOperations.findUserByIdentifier(email);
+    const existingUser = await findUserByIdentifier(email);
     if (existingUser) {
-      return res.status(400).json({ message: 'User already exists with this email, username, or phone' });
+      return res.status(400).json({
+        message: 'User already exists with this email, username, or phone'
+      });
     }
 
-    // Create new user
-    const user = await userOperations.createUser({ username, email, phone, password });
+    // Create user (password auto-hashed)
+    const user = await createUser({ username, email, phone, password });
 
-    // Generate JWT token
-    const token = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: '7d' });
+    // Generate JWT
+    const token = jwt.sign(
+      { userId: user._id },
+      JWT_SECRET,
+      { expiresIn: '7d' }
+    );
 
-    // Remove password from response
-    const { password: _, ...userResponse } = user;
+    // Remove password
+    const { password: _, ...userResponse } = user.toObject();
 
     res.status(201).json({
       message: 'User registered successfully',
@@ -64,39 +82,42 @@ router.post('/register', async (req, res) => {
     });
   } catch (error) {
     console.error('Registration error:', error);
-    res.status(500).json({ message: 'Server error during registration' });
+    res.status(500).json({ message: error.message });
   }
 });
-
-// Login user
 router.post('/login', async (req, res) => {
   try {
-    const { identifier, password } = req.body; // identifier can be username, email, or phone
+    const { identifier, password } = req.body;
 
     if (!identifier || !password) {
-      return res.status(400).json({ message: 'Identifier and password are required' });
+      return res.status(400).json({
+        message: 'Identifier and password are required'
+      });
     }
 
-    // Find user by username, email, or phone
-    const user = await userOperations.findUserByIdentifier(identifier);
+    const user = await findUserByIdentifier(identifier);
 
     if (!user || !user.isActive) {
       return res.status(401).json({ message: 'Invalid credentials' });
     }
 
-    // Check password (in production, use proper password hashing)
-    if (user.password !== password) {
+    // 🔐 Secure password check
+    const isPasswordValid = await comparePassword(password, user.password);
+    if (!isPasswordValid) {
       return res.status(401).json({ message: 'Invalid credentials' });
     }
 
     // Update last login
-    await userOperations.updateLastLogin(user.id);
+    await updateLastLogin(user._id);
 
-    // Generate JWT token
-    const token = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: '7d' });
+    // Generate JWT
+    const token = jwt.sign(
+      { userId: user._id },
+      JWT_SECRET,
+      { expiresIn: '7d' }
+    );
 
-    // Remove password from response
-    const { password: _, ...userResponse } = user;
+    const { password: _, ...userResponse } = user.toObject();
 
     res.json({
       message: 'Login successful',
@@ -105,14 +126,13 @@ router.post('/login', async (req, res) => {
     });
   } catch (error) {
     console.error('Login error:', error);
-    res.status(500).json({ message: 'Server error during login' });
+    res.status(500).json({ message: error.message });
   }
 });
 
-// Get current user profile
 router.get('/profile', authenticateToken, async (req, res) => {
   try {
-    const { password: _, ...userResponse } = req.user;
+    const { password: _, ...userResponse } = req.user.toObject();
     res.json({ user: userResponse });
   } catch (error) {
     console.error('Profile error:', error);
@@ -120,36 +140,24 @@ router.get('/profile', authenticateToken, async (req, res) => {
   }
 });
 
-// Update user preferences
 router.put('/preferences', authenticateToken, async (req, res) => {
   try {
     const { vehicleType, preferences } = req.body;
-    
+
+    // Merge preferences safely
     const updatedPreferences = {
-      ...JSON.parse(req.user.preferences || '{}'),
-      ...preferences
+      ...(req.user.preferences || {}),
+      ...(preferences || {})
     };
 
     if (vehicleType) {
-      // Update vehicle type in database
-      const db = require('../database').db;
-      await new Promise((resolve, reject) => {
-        db.run(
-          `UPDATE users SET vehicleType = ? WHERE id = ?`,
-          [vehicleType, req.user.id],
-          function(err) {
-            if (err) reject(err);
-            else resolve();
-          }
-        );
-      });
+      await updateVehicleType(req.user._id, vehicleType);
     }
 
-    await userOperations.updateUserPreferences(req.user.id, updatedPreferences);
+    await updateUserPreferences(req.user._id, updatedPreferences);
 
-    // Get updated user
-    const updatedUser = await userOperations.findUserById(req.user.id);
-    const { password: _, ...userResponse } = updatedUser;
+    const updatedUser = await findUserById(req.user._id);
+    const { password: _, ...userResponse } = updatedUser.toObject();
 
     res.json({
       message: 'Preferences updated successfully',
@@ -157,13 +165,14 @@ router.put('/preferences', authenticateToken, async (req, res) => {
     });
   } catch (error) {
     console.error('Preferences update error:', error);
-    res.status(500).json({ message: 'Server error updating preferences' });
+    res.status(500).json({
+      message: error.message
+    });
   }
 });
 
-// Verify token endpoint
 router.get('/verify', authenticateToken, (req, res) => {
-  const { password: _, ...userResponse } = req.user;
+  const { password: _, ...userResponse } = req.user.toObject();
   res.json({ valid: true, user: userResponse });
 });
 

@@ -4,7 +4,8 @@
 // Windows: ipconfig
 
 const API_BASE_URL = __DEV__ 
-  ? 'http://localhost:3000'  // Development - use localhost for simulator
+  // ? 'http://localhost:3000'  // Development - use localhost for simulator
+  ? 'https://curt-gentled-nida.ngrok-free.dev'
   : 'https://your-production-api.com';  // Production URL
 
 export default {
