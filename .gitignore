@@ -68,4 +68,5 @@ backend/.env
 # Mobile
 mobile/node_modules/
 mobile/.expo/
+mobile/.env
 
